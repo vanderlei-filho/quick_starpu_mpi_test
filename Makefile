@@ -10,11 +10,11 @@ MPICXX = mpicxx
 PROG = hello_starpu_mpi
 
 # StarPU flags and libraries
-CXXFLAGS += $(shell pkg-config --cflags starpu-$(STARPU_VERSION))
-LDLIBS += $(shell pkg-config --libs starpu-$(STARPU_VERSION)) -lmpi
+CXXFLAGS += $(shell pkg-config --cflags starpu-$(STARPU_VERSION)) -fPIC -rdynamic
+LDLIBS += $(shell pkg-config --libs starpu-$(STARPU_VERSION)) -lmpi -ldl
 
-# Add -rdynamic to make functions visible (needed for Master-Slave)
-LDFLAGS += -rdynamic
+# Add flags to make functions visible (needed for Master-Slave)
+LDFLAGS += -rdynamic -Wl,--export-dynamic -Wl,-E
 
 # Main build target
 all: $(PROG)
@@ -23,7 +23,7 @@ all: $(PROG)
 main.o: main.cpp
 	$(MPICXX) $(CXXFLAGS) -c $< -o $@
 
-# Link rule - use MPI C++ compiler wrapper with -rdynamic
+# Link rule - use MPI C++ compiler wrapper with visibility flags
 $(PROG): main.o
 	$(MPICXX) $(LDFLAGS) -o $@ $< $(LDLIBS)
 
