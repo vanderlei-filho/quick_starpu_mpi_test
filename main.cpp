@@ -107,8 +107,6 @@ int main(int argc, char **argv)
         /* Wait for all tasks to complete */
         starpu_task_wait_for_all();
         printf("\nAll tasks completed!\n");
-    }
-    else {
         /* SLAVE NODE CODE - just report that we're ready */
         printf("Slave node %s (Rank %d) ready with %d StarPU workers\n", 
                hostname, rank, starpu_worker_get_count());
@@ -120,5 +118,3 @@ int main(int argc, char **argv)
     starpu_shutdown();
     MPI_Finalize();
     
-    return 0;
-}
