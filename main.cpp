@@ -1,6 +1,5 @@
 /*
  * Simple StarPU MPI Master-Slave Hello World Example
- * For running on 2 nodes with 4 cores each
  */
 #include <mpi.h>
 #include <starpu.h>
@@ -8,12 +7,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-
-/* Simple structure to pass to tasks */
-typedef struct {
-  int task_id;
-  char message[128];
-} hello_data_t;
 
 /* CPU task implementation - using extern "C" to prevent name mangling */
 extern "C" __attribute__((visibility("default"))) 
@@ -35,14 +28,14 @@ void hello_world_cpu(void *buffers[], void *cl_arg) {
          hostname, rank, worker_id, message);
          
   /* Simulate some work */
-  usleep(100000 * (task_id % 10 + 1));
+  usleep(50000);
 }
 
 /* Define StarPU codelet with function name - critical for Master-Slave */
 static struct starpu_codelet hello_cl = {
     .cpu_funcs = {hello_world_cpu},
     .cpu_funcs_name = {"hello_world_cpu"}, /* Name required for Master-Slave */
-    .nbuffers = 0, /* No data buffers used, just arguments */
+    .nbuffers = 0,
     .name = "hello_world"
 };
 
@@ -56,9 +49,11 @@ int main(int argc, char **argv) {
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   MPI_Comm_size(MPI_COMM_WORLD, &world_size);
   
-  /* Initialize StarPU */
+  /* Initialize StarPU with minimal config */
   struct starpu_conf conf;
   starpu_conf_init(&conf);
+  conf.nmpi_ms = 1; /* Use only 1 thread per slave node */
+  
   ret = starpu_init(&conf);
   if (ret != 0) {
     fprintf(stderr, "Error initializing StarPU: %s\n", strerror(-ret));
@@ -69,38 +64,28 @@ int main(int argc, char **argv) {
   char hostname[256];
   gethostname(hostname, sizeof(hostname));
   
-  /* Debug symbol resolution */
-  void *handle = dlopen(NULL, RTLD_NOW);
-  void *sym = dlsym(handle, "hello_world_cpu");
-  printf("Looking up hello_world_cpu: %p\n", sym);
-  if (!sym) {
-    printf("Error: %s\n", dlerror());
-  }
-  
   /* In the Master-Slave model, only the master node (rank 0) submits tasks */
   if (rank == 0) {
-    /* MASTER NODE CODE */
-    printf("Master node starting on %s with %d workers\n", hostname,
-           starpu_worker_get_count());
-    printf("Detected %d nodes in the MPI world\n", world_size);
+    printf("Master node %s with %d workers\n", hostname, starpu_worker_get_count());
+    printf("Using %d MPI nodes\n", world_size);
     
-    /* Number of tasks to submit */
-    int num_tasks = 10;
-    printf("\nSubmitting %d hello world tasks...\n\n", num_tasks);
+    /* Submit only a few tasks */
+    int num_tasks = world_size * 2; /* 2 tasks per node */
     
     /* Submit tasks to be distributed across nodes */
     for (i = 0; i < num_tasks; i++) {
-      /* Prepare message for this task */
       char message[128];
-      sprintf(message, "Hello World from task %d!", i);
+      sprintf(message, "Hello from task %d", i);
       
-      /* Choose which node should run this task (round-robin) */
+      /* Round-robin distribution */
       int target_node = i % world_size;
       
-      /* Submit the task */
-      ret = starpu_task_insert(&hello_cl, STARPU_VALUE, &i, sizeof(int),
+      ret = starpu_task_insert(&hello_cl, 
+                               STARPU_VALUE, &i, sizeof(int),
                                STARPU_VALUE, message, strlen(message) + 1,
-                               STARPU_EXECUTE_ON_NODE, target_node, 0);
+                               STARPU_EXECUTE_ON_NODE, target_node, 
+                               0);
+      
       if (ret != 0) {
         fprintf(stderr, "Error submitting task %d: %s\n", i, strerror(-ret));
       }
@@ -108,15 +93,13 @@ int main(int argc, char **argv) {
     
     /* Wait for all tasks to complete */
     starpu_task_wait_for_all();
-    printf("\nAll tasks completed!\n");
+    printf("All tasks completed!\n");
   } else {
-    /* SLAVE NODE CODE - just report that we're ready */
-    printf("Slave node %s (Rank %d) ready with %d StarPU workers\n", hostname,
-           rank, starpu_worker_get_count());
-    /* The slave nodes automatically process tasks sent by the master */
+    printf("Slave node %s (Rank %d) ready with %d workers\n", 
+           hostname, rank, starpu_worker_get_count());
   }
   
-  /* Shutdown */
+  /* Clean shutdown */
   starpu_shutdown();
   MPI_Finalize();
   return 0;
