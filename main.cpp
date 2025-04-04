@@ -1,147 +1,124 @@
-#include <iostream>
+/*
+ * Simple StarPU MPI Master-Slave Hello World Example
+ * For running on 2 nodes with 4 cores each
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
 #include <starpu.h>
-#include <starpu_mpi.h>
-#include <starpu_scheduler.h>
-#include <string>
-#include <vector>
+#include <mpi.h>
 
-// Define a simple task struct to hold data
-struct hello_task_data {
-  int node_id;
-  int task_id;
-  int result;
-};
+/* Simple structure to pass to tasks */
+typedef struct {
+    int task_id;
+    char message[128];
+} hello_data_t;
 
-// CPU implementation of our hello world task
-void hello_world_cpu_func(void *buffers[], void *cl_arg) {
-  // Get the task data from the codelet argument
-  hello_task_data *data = (hello_task_data *)cl_arg;
-
-  // Simulating some computation by incrementing the task ID
-  data->result = data->task_id * 10 + data->node_id;
-
-  // Report task execution
-  int rank;
-  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-  std::cout << "Hello from Node " << rank << "! Executing task "
-            << data->task_id << ", computed result: " << data->result
-            << std::endl;
-
-  // Simulate some work
-  starpu_usleep(100000); // Sleep for 100ms
+/* CPU task implementation - must be a globally visible function (not static) */
+void hello_world_cpu(void *buffers[], void *cl_arg)
+{
+    /* Unpack the task arguments */
+    int task_id;
+    char message[128];
+    starpu_codelet_unpack_args(cl_arg, &task_id, message);
+    
+    /* Get information about where we're running */
+    char hostname[256];
+    gethostname(hostname, sizeof(hostname));
+    int worker_id = starpu_worker_get_id();
+    int rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    
+    /* Print hello message */
+    printf("Task %d executing on %s (MPI rank %d, worker %d): %s\n",
+           task_id, hostname, rank, worker_id, message);
+    
+    /* Simulate some work */
+    usleep(100000 * (task_id % 10 + 1));
 }
 
-// Define our StarPU codelet
-static struct starpu_codelet hello_world_codelet = {
-    .cpu_funcs = {hello_world_cpu_func},
-    .cpu_funcs_name = {"hello_world_cpu_func"},
-    .nbuffers = 0, // No data buffers, using cl_arg
-    .name = "hello_world_codelet"};
+/* Define StarPU codelet with function name - critical for Master-Slave */
+static struct starpu_codelet hello_cl = {
+    .cpu_funcs = {hello_world_cpu},
+    .cpu_funcs_name = {"hello_world_cpu"}, /* Name required for Master-Slave */
+    .nbuffers = 0, /* No data buffers used, just arguments */
+    .name = "hello_world"
+};
 
-int main(int argc, char **argv) {
-  // Initialize MPI
-  int provided;
-  MPI_Init_thread(&argc, &argv, MPI_THREAD_SERIALIZED, &provided);
-
-  int rank, world_size;
-  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-  MPI_Comm_size(MPI_COMM_WORLD, &world_size);
-
-  // Initialize StarPU with default configuration
-  struct starpu_conf conf;
-  starpu_conf_init(&conf);
-
-  // Uncomment to set specific number of CPU cores per node (default uses all
-  // available) conf.ncpus = 4;  // Set to use 4 cores per node
-
-  int ret = starpu_init(&conf);
-  if (ret != 0) {
-    std::cerr << "Error initializing StarPU: " << strerror(-ret) << std::endl;
-    MPI_Finalize();
-    return 1;
-  }
-
-  // Initialize StarPU-MPI
-  ret = starpu_mpi_init(NULL, NULL, 0);
-  if (ret != 0) {
-    std::cerr << "Error initializing StarPU-MPI: " << strerror(-ret)
-              << std::endl;
+int main(int argc, char **argv)
+{
+    int ret, i;
+    int rank, world_size;
+    
+    /* Initialize MPI with thread support */
+    int provided;
+    MPI_Init_thread(&argc, &argv, MPI_THREAD_SERIALIZED, &provided);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &world_size);
+    
+    /* Initialize StarPU */
+    struct starpu_conf conf;
+    starpu_conf_init(&conf);
+    
+    ret = starpu_init(&conf);
+    if (ret != 0) {
+        fprintf(stderr, "Error initializing StarPU: %s\n", strerror(-ret));
+        MPI_Finalize();
+        return 1;
+    }
+    
+    char hostname[256];
+    gethostname(hostname, sizeof(hostname));
+    
+    /* In the Master-Slave model, only the master node (rank 0) submits tasks */
+    if (rank == 0) {
+        /* MASTER NODE CODE */
+        printf("Master node starting on %s with %d workers\n", 
+               hostname, starpu_worker_get_count());
+        printf("Detected %d nodes in the MPI world\n", world_size);
+        
+        /* Number of tasks to submit */
+        int num_tasks = 10;
+        printf("\nSubmitting %d hello world tasks...\n\n", num_tasks);
+        
+        /* Submit tasks to be distributed across nodes */
+        for (i = 0; i < num_tasks; i++) {
+            /* Prepare message for this task */
+            char message[128];
+            sprintf(message, "Hello World from task %d!", i);
+            
+            /* Choose which node should run this task (round-robin) */
+            int target_node = i % world_size;
+            
+            /* Submit the task */
+            ret = starpu_task_insert(&hello_cl,
+                                   STARPU_VALUE, &i, sizeof(int),
+                                   STARPU_VALUE, message, strlen(message) + 1,
+                                   STARPU_EXECUTE_ON_NODE, target_node,
+                                   0);
+            
+            if (ret != 0) {
+                fprintf(stderr, "Error submitting task %d: %s\n", i, strerror(-ret));
+            }
+        }
+        
+        /* Wait for all tasks to complete */
+        starpu_task_wait_for_all();
+        printf("\nAll tasks completed!\n");
+    }
+    else {
+        /* SLAVE NODE CODE - just report that we're ready */
+        printf("Slave node %s (Rank %d) ready with %d StarPU workers\n", 
+               hostname, rank, starpu_worker_get_count());
+        
+        /* The slave nodes automatically process tasks sent by the master */
+    }
+    
+    /* Shutdown */
     starpu_shutdown();
     MPI_Finalize();
-    return 1;
-  }
-
-  std::cout << "Node " << rank << "/" << world_size << " initialized with "
-            << starpu_worker_get_count() << " StarPU workers" << std::endl;
-
-  // Total number of tasks to execute
-  const int TASKS_PER_NODE = 8;
-  const int TOTAL_TASKS = TASKS_PER_NODE * world_size;
-
-  // Simple round-robin task distribution
-  if (rank == 0) {
-    // MASTER NODE: Create and submit all tasks
-    std::cout << "Master node distributing " << TOTAL_TASKS << " tasks..."
-              << std::endl;
-
-    std::vector<hello_task_data> task_data(TOTAL_TASKS);
-    std::vector<starpu_task *> tasks(TOTAL_TASKS);
-
-    for (int i = 0; i < TOTAL_TASKS; i++) {
-      // Determine which node should execute this task
-      int target_node = i % world_size;
-
-      // Setup task data
-      task_data[i].node_id = target_node;
-      task_data[i].task_id = i;
-      task_data[i].result = 0;
-
-      // Create the task
-      tasks[i] = starpu_task_create();
-      tasks[i]->cl = &hello_world_codelet;
-      tasks[i]->cl_arg = &task_data[i];
-      tasks[i]->cl_arg_size = sizeof(hello_task_data);
-
-      // Set the task to execute on a specific MPI node
-      tasks[i]->execute_on_a_specific_worker = 0;
-
-      // Submit the task
-      if (target_node == 0) {
-        // Execute locally
-        ret = starpu_task_submit(tasks[i]);
-      } else {
-        // Send to another node
-        ret = starpu_mpi_task_insert(MPI_COMM_WORLD, &hello_world_codelet,
-                                     STARPU_EXECUTE_ON_NODE, target_node,
-                                     STARPU_VALUE, &task_data[i],
-                                     sizeof(hello_task_data), 0);
-      }
-
-      if (ret != 0) {
-        std::cerr << "Error submitting task " << i << ": " << strerror(-ret)
-                  << std::endl;
-      }
-    }
-
-    // Wait for all tasks to complete
-    starpu_task_wait_for_all();
-
-    // Collect and display results
-    std::cout << "\nAll tasks completed! Results summary:" << std::endl;
-    for (int i = 0; i < TOTAL_TASKS; i++) {
-      std::cout << "Task " << i << " on Node " << task_data[i].node_id
-                << " computed: " << task_data[i].result << std::endl;
-    }
-  } else {
-    // WORKER NODES: Just execute tasks sent by the master
-    // The StarPU-MPI layer handles receiving and executing the tasks
-    starpu_mpi_wait_for_all(MPI_COMM_WORLD);
-  }
-
-  // Cleanup and shutdown
-  starpu_mpi_shutdown();
-  starpu_shutdown();
-  MPI_Finalize();
-
-  return 0;
+    
+    return 0;
 }
