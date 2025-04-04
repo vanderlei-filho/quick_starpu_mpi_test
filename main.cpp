@@ -99,8 +99,15 @@ int main(int argc, char **argv) {
            hostname, rank, starpu_worker_get_count());
   }
   
+  /* Ensure all nodes synchronize before shutdown */
+  MPI_Barrier(MPI_COMM_WORLD);
+  
   /* Clean shutdown */
   starpu_shutdown();
+  
+  /* Final synchronization before MPI_Finalize */
+  MPI_Barrier(MPI_COMM_WORLD);
   MPI_Finalize();
+  
   return 0;
 }
