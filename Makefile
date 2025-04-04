@@ -1,18 +1,17 @@
 # Simple Makefile for StarPU MPI Master-Slave Hello World
-
 # StarPU version
 STARPU_VERSION=1.4
 
-# Compilers
-CC = gcc
-MPICC = mpicc
+# Compilers - use C++ compilers since the source is C++
+CXX = g++
+MPICXX = mpicxx
 
 # Program to build
 PROG = hello_starpu_mpi
 
 # StarPU flags and libraries
-CFLAGS += $(shell pkg-config --cflags starpu-$(STARPU_VERSION))
-LDLIBS += $(shell pkg-config --libs starpu-$(STARPU_VERSION))
+CXXFLAGS += $(shell pkg-config --cflags starpu-$(STARPU_VERSION))
+LDLIBS += $(shell pkg-config --libs starpu-$(STARPU_VERSION)) -lmpi
 
 # Add -rdynamic to make functions visible (needed for Master-Slave)
 LDFLAGS += -rdynamic
@@ -20,13 +19,13 @@ LDFLAGS += -rdynamic
 # Main build target
 all: $(PROG)
 
-# Compile rule - use MPI compiler wrapper
+# Compile rule - use MPI C++ compiler wrapper
 main.o: main.cpp
-	$(MPICC) $(CFLAGS) -c $< -o $@
+	$(MPICXX) $(CXXFLAGS) -c $< -o $@
 
-# Link rule - use MPI compiler wrapper with -rdynamic
+# Link rule - use MPI C++ compiler wrapper with -rdynamic
 $(PROG): main.o
-	$(MPICC) $(LDFLAGS) -o $@ $< $(LDLIBS)
+	$(MPICXX) $(LDFLAGS) -o $@ $< $(LDLIBS)
 
 # Clean target
 clean:
