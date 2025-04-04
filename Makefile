@@ -21,7 +21,7 @@ LDFLAGS += -rdynamic
 all: $(PROG)
 
 # Compile rule - use MPI compiler wrapper
-main.o: main.c
+main.o: main.cpp
 	$(MPICC) $(CFLAGS) -c $< -o $@
 
 # Link rule - use MPI compiler wrapper with -rdynamic
