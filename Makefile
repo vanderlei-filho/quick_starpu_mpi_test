@@ -1,34 +1,41 @@
-# Simple Makefile for StarPU MPI Master-Slave Hello World
 # StarPU version
 STARPU_VERSION=1.4
 
-# Compilers - use C++ compilers since the source is C++
+# Compilers
 CXX = g++
 MPICXX = mpicxx
 
-# Program to build
-PROG = hello_starpu_mpi
+# Programs to build
+PROG1 = hello_starpu
+PROG2 = hello_starpu_mpi
 
 # StarPU flags and libraries
 CXXFLAGS += $(shell pkg-config --cflags starpu-$(STARPU_VERSION)) -fPIC -rdynamic
-LDLIBS += $(shell pkg-config --libs starpu-$(STARPU_VERSION)) -lmpi -ldl
+LDLIBS += $(shell pkg-config --libs starpu-$(STARPU_VERSION)) -ldl
+MPI_LDLIBS = $(LDLIBS) -lmpi
 
-# Add flags to make functions visible (needed for Master-Slave)
+# Flags to make functions visible (needed for MPI Master-Slave)
 LDFLAGS += -rdynamic -Wl,--export-dynamic -Wl,-E
 
-# Main build target
-all: $(PROG)
+# Main build target - build both programs
+all: $(PROG1) $(PROG2)
 
-# Compile rule - use MPI C++ compiler wrapper
-main.o: main.cpp
+# Compile rules
+hello_starpu.o: hello_starpu.cpp
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+mpi_hello_starpu.o: mpi_hello_starpu.cpp
 	$(MPICXX) $(CXXFLAGS) -c $< -o $@
 
-# Link rule - use MPI C++ compiler wrapper with visibility flags
-$(PROG): main.o
-	$(MPICXX) $(LDFLAGS) -o $@ $< $(LDLIBS)
+# Link rules
+$(PROG1): hello_starpu.o
+	$(CXX) $(LDFLAGS) -o $@ $< $(LDLIBS)
+
+$(PROG2): mpi_hello_starpu.o
+	$(MPICXX) $(LDFLAGS) -o $@ $< $(MPI_LDLIBS)
 
 # Clean target
 clean:
-	rm -f $(PROG) *.o
+	rm -f $(PROG1) $(PROG2) *.o
 
 .PHONY: all clean
